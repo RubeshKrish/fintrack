@@ -410,21 +410,37 @@ function calcEmiStats(){
   return{active,done,monthlyTotal,totalPending,totalPaid,overdue};
 }
 
-function calcLentOut(){
-  // All quick lending (lent + bought for someone)
-  const quickLent=S.lending.filter(l=>!l.settled).reduce((s,l)=>s+(Number(l.amt)||0),0);
-  // Friends money lent
-  const friendLent=S.friends.reduce((s,f)=>s+(f.transactions||[]).filter(t=>!t.settled&&t.dir==='lent').reduce((ss,t)=>ss+(Number(t.amt)||0),0),0);
-  return quickLent+friendLent;
+function calcLentBreakdown(){
+  // 💸 Pure lent money — you gave cash, they owe you back
+  const quickLent   = S.lending.filter(l=>!l.settled&&l.type==='lend').reduce((s,l)=>s+(Number(l.amt)||0),0);
+  // 🛍 Bought for someone — you paid for them, they owe you back (this IS money owed to you)
+  const quickBought = S.lending.filter(l=>!l.settled&&l.type==='buy').reduce((s,l)=>s+(Number(l.amt)||0),0);
+  // 👥 Friends — money you lent to friends (they owe you)
+  const friendLent  = S.friends.reduce((s,f)=>s+(f.transactions||[]).filter(t=>!t.settled&&t.dir==='lent').reduce((ss,t)=>ss+(Number(t.amt)||0),0),0);
+  // 🤲 Friends — money you borrowed from friends (you owe them)
+  const friendBorrowed = S.friends.reduce((s,f)=>s+(f.transactions||[]).filter(t=>!t.settled&&t.dir==='borrowed').reduce((ss,t)=>ss+(Number(t.amt)||0),0),0);
+
+  // Total others owe YOU = lent + bought for someone + friends lent
+  const totalOweYou = quickLent + quickBought + friendLent;
+  // Total YOU owe others = borrowed from friends only
+  const totalYouOwe = friendBorrowed;
+  const net         = totalOweYou - totalYouOwe;
+
+  return{
+    quickLent,       // Cash lent to people
+    quickBought,     // Bought for people (they owe you)
+    friendLent,      // Money lent to friends
+    friendBorrowed,  // Money borrowed from friends
+    totalOweYou,     // Grand total others owe you
+    totalYouOwe,     // Grand total you owe others
+    net,             // Net position
+  };
 }
-function calcBorrowed(){
-  // Money borrowed from friends
-  return S.friends.reduce((s,f)=>s+(f.transactions||[]).filter(t=>!t.settled&&t.dir==='borrowed').reduce((ss,t)=>ss+(Number(t.amt)||0),0),0);
-}
+function calcLentOut(){ return calcLentBreakdown().totalOweYou; }
+function calcBorrowed(){ return calcLentBreakdown().friendBorrowed; }
 function calcNetLending(){
-  const lentOut=calcLentOut();
-  const borrowed=calcBorrowed();
-  return{lentOut,borrowed,net:lentOut-borrowed};
+  const b=calcLentBreakdown();
+  return{lentOut:b.totalOweYou,borrowed:b.totalYouOwe,net:b.net,breakdown:b};
 }
 
 function calcFriendStats(){
@@ -810,24 +826,72 @@ function pgDash(){
       <div class="sc cb"><div class="sl">Saving Rate</div><div class="sv cb">${st.savingRate}%</div><div class="ss">${MONTHS[now.getMonth()]} ${now.getFullYear()}</div></div>
     </div>
 
-    <!-- FIX 4: Net Borrow / Lend Section -->
-    <div class="section-title">💸 Lending & Borrowing Summary</div>
-    <div class="crow">
-      <div class="sc cam" style="cursor:pointer" data-bnav="lending"><div class="sl">Total Lent Out</div><div class="sv cam" style="font-size:17px">${fmt(nl.lentOut)}</div><div class="ss">Quick lend + Friends</div></div>
-      <div class="sc cp" style="cursor:pointer" data-bnav="friends"><div class="sl">Total Borrowed</div><div class="sv cp" style="font-size:17px">${fmt(nl.borrowed)}</div><div class="ss">From friends</div></div>
-    </div>
-    <div class="sc ${nl.net>=0?'cam':'cp'}" style="margin-bottom:16px;padding:14px">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div class="sl">Net Lending Position</div>
-          <div class="sv ${nl.net>=0?'cam':'cp'}" style="font-size:22px">${nl.net>=0?'+':''}${fmt(nl.net)}</div>
-          <div class="ss">${nl.net>=0?'People owe you more than you owe':'You owe more than people owe you'}</div>
+    <!-- FIX 4: Net Borrow / Lend Section — Advanced breakdown -->
+    <div class="section-title">💸 Lending & Borrowing</div>
+
+    <!-- Who owes YOU -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:10px">
+      <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:10px">📤 People Who Owe YOU</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+        <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;cursor:pointer" data-bnav="lending">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">💸 Cash Lent</div>
+          <div class="mono cam" style="font-size:14px">${fmt(nl.breakdown.quickLent)}</div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">Quick lending</div>
         </div>
-        <div style="font-size:36px">${nl.net>=0?'💰':'🤲'}</div>
+        <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;cursor:pointer" data-bnav="lending">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">🛍 Bought For</div>
+          <div class="mono cam" style="font-size:14px">${fmt(nl.breakdown.quickBought)}</div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">Paid for them</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:8px;padding:8px;text-align:center;cursor:pointer" data-bnav="friends">
+          <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">👥 Lent Friends</div>
+          <div class="mono cam" style="font-size:14px">${fmt(nl.breakdown.friendLent)}</div>
+          <div style="font-size:9px;color:var(--text3);margin-top:2px">Friends owe you</div>
+        </div>
       </div>
-      <div style="display:flex;gap:12px;margin-top:10px;font-size:11px">
-        <span style="color:var(--amber)">📤 Lent: ${fmt(nl.lentOut)}</span>
-        <span style="color:var(--pink)">📥 Borrowed: ${fmt(nl.borrowed)}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(255,190,11,.1);border:1px solid rgba(255,190,11,.2);border-radius:8px;padding:10px 12px">
+        <span style="font-size:12px;color:var(--amber);font-weight:600">Total Others Owe YOU</span>
+        <span class="mono cam" style="font-size:17px;font-weight:700">${fmt(nl.breakdown.totalOweYou)}</span>
+      </div>
+    </div>
+
+    <!-- What YOU owe -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);padding:14px;margin-bottom:10px">
+      <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:10px">📥 What YOU Owe Others</div>
+      <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:10px;cursor:pointer" data-bnav="friends">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:12px;font-weight:600">🤲 Borrowed from Friends</div>
+            <div style="font-size:10px;color:var(--text3);margin-top:2px">Money friends gave you</div>
+          </div>
+          <div class="mono cp" style="font-size:16px">${fmt(nl.breakdown.friendBorrowed)}</div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;background:rgba(255,110,180,.1);border:1px solid rgba(255,110,180,.2);border-radius:8px;padding:10px 12px">
+        <span style="font-size:12px;color:var(--pink);font-weight:600">Total YOU Owe Others</span>
+        <span class="mono cp" style="font-size:17px;font-weight:700">${fmt(nl.breakdown.totalYouOwe)}</span>
+      </div>
+    </div>
+
+    <!-- Net Position -->
+    <div style="background:${nl.net>=0?'rgba(0,214,143,.08)':'rgba(255,110,180,.08)'};border:1.5px solid ${nl.net>=0?'rgba(0,214,143,.3)':'rgba(255,110,180,.3)'};border-radius:var(--r2);padding:16px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div>
+          <div style="font-size:10px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:4px">Net Position</div>
+          <div class="mono ${nl.net>=0?'cg':'cp'}" style="font-size:24px;font-weight:700">${nl.net>=0?'+':''}${fmt(nl.net)}</div>
+        </div>
+        <div style="font-size:40px">${nl.net>=0?'💰':'🤲'}</div>
+      </div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">${nl.net>=0?'✅ You are in profit — more people owe you than you owe':'⚠️ You owe more than people owe you — clear your debts'}</div>
+      <div style="display:flex;gap:0;background:var(--bg3);border-radius:8px;overflow:hidden">
+        <div style="flex:1;padding:8px;text-align:center;border-right:1px solid var(--border)">
+          <div style="font-size:9px;color:var(--text3);margin-bottom:2px">OWED TO YOU</div>
+          <div class="mono cam" style="font-size:13px">${fmt(nl.breakdown.totalOweYou)}</div>
+        </div>
+        <div style="flex:1;padding:8px;text-align:center">
+          <div style="font-size:9px;color:var(--text3);margin-bottom:2px">YOU OWE</div>
+          <div class="mono cp" style="font-size:13px">${fmt(nl.breakdown.totalYouOwe)}</div>
+        </div>
       </div>
     </div>
 
